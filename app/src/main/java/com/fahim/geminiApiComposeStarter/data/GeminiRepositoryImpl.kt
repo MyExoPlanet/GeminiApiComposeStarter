@@ -8,20 +8,37 @@ private const val TAG = "GeminiRepository"
 private const val DEFAULT_MODEL = "gemini-3.6-flash"
 
 class GeminiRepositoryImpl(
-    apiKey: String,
-    modelName: String = DEFAULT_MODEL,
+    private val apiKeyStorage: SecureApiKeyStorage,
+    private val initialApiKey: String,
+    private val modelName: String = DEFAULT_MODEL,
 ) : GeminiRepository {
 
-    private val model = GenerativeModel(modelName = modelName, apiKey = apiKey)
-
     override suspend fun generateText(prompt: String): Result<String> = try {
-        val response = model.generateContent(prompt)
-        val text = response.text?.takeIf { it.isNotBlank() }
-        if (text != null) {
-            Result.success(text)
-        } else {
-            Result.failure(IllegalStateException("Empty response from Gemini"))
-        }
+        apiKeyStorage.withApiKey(initialApiKey) { apiKey ->
+
+            // The decrypted API key exists only while the Gemini model
+            // is being created and used for this request.
+            val model = GenerativeModel(
+                modelName = modelName,
+                apiKey = apiKey,
+            )
+
+            val response = model.generateContent(prompt)
+
+            val text = response.text?.takeIf { it.isNotBlank() }
+
+            if (text != null) {
+                Result.success(text)
+            } else {
+                Result.failure(
+                    IllegalStateException("Empty response from Gemini")
+                )
+            }
+        } ?: Result.failure(
+            IllegalStateException(
+                "Gemini API key is missing."
+            )
+        )
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
