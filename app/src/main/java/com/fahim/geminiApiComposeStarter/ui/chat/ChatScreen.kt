@@ -1,5 +1,9 @@
 package com.fahim.geminiApiComposeStarter.ui.chat
 
+import android.content.Intent
+import android.speech.RecognizerIntent
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,16 +39,29 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.fahim.geminiApiComposeStarter.R
+import com.fahim.geminiApiComposeStarter.data.ChatMessage
 import com.fahim.geminiApiComposeStarter.ui.theme.GeminiApiComposeStarterTheme
-
+import androidx.compose.material3.Switch
+import androidx.compose.material3.windowsizeclass.WindowSizeClass
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.material3.windowsizeclass.ExperimentalMaterial3WindowSizeClassApi
+import androidx.compose.material3.windowsizeclass.WindowWidthSizeClass
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 @Composable
-fun ChatRoute(viewModel: ChatViewModel) {
+fun ChatRoute(
+    viewModel: ChatViewModel,
+    windowSizeClass: WindowSizeClass,
+    ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
 
     ChatScreen(
         state = state,
         onPromptChange = viewModel::onPromptChange,
         onSend = viewModel::onSend,
+        onShowTimestampsChange = viewModel::setShowTimestamps,
+        windowSizeClass = windowSizeClass,
     )
 }
 
@@ -53,9 +70,25 @@ fun ChatScreen(
     state: ChatUiState,
     onPromptChange: (String) -> Unit,
     onSend: () -> Unit,
+    onShowTimestampsChange: (Boolean) -> Unit,
+    windowSizeClass: WindowSizeClass,
 ) {
+    val isCompact = windowSizeClass.widthSizeClass ==
+            WindowWidthSizeClass.Compact
     val snackbarHostState = remember { SnackbarHostState() }
     val listState = rememberLazyListState()
+
+    val voiceLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val spokenText = result.data
+            ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            ?.firstOrNull()
+
+        if (!spokenText.isNullOrBlank()) {
+            onPromptChange(spokenText)
+        }
+    }
 
     LaunchedEffect(state.errorMessage) {
         state.errorMessage?.let {
@@ -71,6 +104,23 @@ fun ChatScreen(
         }
     }
 
+    val startVoiceInput = {
+        val intent = Intent(
+            RecognizerIntent.ACTION_RECOGNIZE_SPEECH
+        ).apply {
+            putExtra(
+                RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
+            )
+            putExtra(
+                RecognizerIntent.EXTRA_PROMPT,
+                "Speak your prompt"
+            )
+        }
+
+        voiceLauncher.launch(intent)
+    }
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -84,8 +134,26 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 16.dp),
+                .padding(
+                    horizontal = if (isCompact) 16.dp else 48.dp,
+                    vertical = 16.dp,
+                ),
         ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Show timestamps",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+
+                Switch(
+                    checked = state.showTimestamps,
+                    onCheckedChange = onShowTimestampsChange,
+                )
+            }
 
             if (state.messages.isEmpty()) {
                 Box(
@@ -95,7 +163,9 @@ fun ChatScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Text(
-                        text = stringResource(R.string.response_placeholder),
+                        text = stringResource(
+                            R.string.response_placeholder
+                        ),
                         style = MaterialTheme.typography.bodyLarge,
                     )
                 }
@@ -111,7 +181,11 @@ fun ChatScreen(
                         items = state.messages,
                         key = { message -> message.id },
                     ) { message ->
-                        ChatBubble(message = message)
+                        ChatBubble(
+                            message = message,
+                            isCompact= isCompact,
+                            showTimestamp = state.showTimestamps,
+                            )
                     }
 
                     if (state.isLoading) {
@@ -129,20 +203,13 @@ fun ChatScreen(
                 }
             }
 
-            if (state.isLoading && state.messages.isEmpty()) {
-                CircularProgressIndicator(
-                    modifier = Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .padding(8.dp),
-                )
-            }
-
             PromptBar(
                 prompt = state.prompt,
                 promptError = state.promptError,
                 enabled = !state.isLoading,
                 onPromptChange = onPromptChange,
                 onSend = onSend,
+                onVoiceInput = startVoiceInput,
             )
         }
     }
@@ -151,8 +218,10 @@ fun ChatScreen(
 @Composable
 private fun ChatBubble(
     message: ChatMessage,
+    isCompact: Boolean,
+    showTimestamp : Boolean,
 ) {
-    val isUser = message.sender == Sender.USER
+    val isUser = message.sender == "USER"
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -163,6 +232,9 @@ private fun ChatBubble(
         },
     ) {
         Surface(
+            modifier = Modifier.fillMaxWidth(
+                fraction = if (isCompact) 0.88f else 0.65f
+            ),
             shape = MaterialTheme.shapes.large,
             color = if (isUser) {
                 MaterialTheme.colorScheme.primaryContainer
@@ -171,14 +243,27 @@ private fun ChatBubble(
             },
             tonalElevation = 2.dp,
         ) {
-            Text(
-                text = message.text,
+            Column(
                 modifier = Modifier.padding(
                     horizontal = 16.dp,
                     vertical = 12.dp,
                 ),
-                fontSize = 16.sp,
-            )
+            ) {
+                Text(
+                    text = message.text,
+                    fontSize = 16.sp,
+                )
+
+                if (showTimestamp) {
+                    Text(
+                        text = SimpleDateFormat(
+                            "HH:mm",
+                            Locale.getDefault(),
+                        ).format(Date(message.id)),
+                        style = MaterialTheme.typography.labelSmall,
+                    )
+                }
+            }
         }
     }
 }
@@ -190,6 +275,7 @@ private fun PromptBar(
     enabled: Boolean,
     onPromptChange: (String) -> Unit,
     onSend: () -> Unit,
+    onVoiceInput: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -226,17 +312,27 @@ private fun PromptBar(
         )
 
         FilledIconButton(
+            onClick = onVoiceInput,
+            enabled = enabled,
+        ) {
+            Text("🎤")
+        }
+
+        FilledIconButton(
             onClick = onSend,
             enabled = enabled,
         ) {
             Icon(
                 imageVector = Icons.Filled.Send,
-                contentDescription = stringResource(R.string.send),
+                contentDescription = stringResource(
+                    R.string.send
+                ),
             )
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3WindowSizeClassApi::class)
 @Preview(showBackground = true)
 @Composable
 private fun ChatScreenPreview() {
@@ -247,17 +343,21 @@ private fun ChatScreenPreview() {
                     ChatMessage(
                         id = 1L,
                         text = "Hello! Can you help me?",
-                        sender = Sender.USER,
+                        sender = "USER",
                     ),
                     ChatMessage(
                         id = 2L,
                         text = "Of course! What would you like to know?",
-                        sender = Sender.GEMINI,
+                        sender = "GEMINI",
                     ),
                 ),
             ),
             onPromptChange = {},
             onSend = {},
+            onShowTimestampsChange = {},
+            windowSizeClass = WindowSizeClass.calculateFromSize(
+                DpSize(360.dp, 800.dp)
+            ),
         )
     }
 }
